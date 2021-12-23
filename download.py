@@ -11,7 +11,7 @@ resources = requests.get(url).json()["resources"]
 print(f"Found {len(resources)} datasets")
 
 for ix, resource in enumerate(resources):
-    path = os.path.join(download_dir, f"resource['id'].zip");
+    path = os.path.join(download_to, f"{resource['id']}.zip");
     print(f"[{ix:02}/{len(resources)}] Saving '{resource['title']:<40}' to {path}")
 
     response = requests.get(resource["path"])
