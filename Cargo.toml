@@ -1,0 +1,17 @@
+[package]
+name = "enf_analysis"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1"
+structopt = "0.3.13"
+log = "0.4"
+simple_logger = "1"
+reqwest = { version = "0.11", features = ["blocking", "json"] }
+serde = { version = "1", features = ["derive"] }
+zip = "0.5"
+hound = "3.4"
+num-complex = "0.4"
