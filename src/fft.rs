@@ -1,8 +1,11 @@
 use num_complex::Complex32;
-
+use num_traits::Zero;
 
 /// Use the Cooley-Tukey algorithm to compute the fourier transform in O(n log n)
-pub fn fft(n: usize, values: Vec<Complex32>) -> Vec<Complex32> {
+/// the invert argument is used to specify whether the IFFT is to be calculated
+fn fft_recursive(values: Vec<Complex32>, invert: bool) -> Vec<Complex32> {
+    let n = values.len();
+
     // Cooley-Tukey only works on powers of two
     assert!(n.is_power_of_two());
 
@@ -23,18 +26,42 @@ pub fn fft(n: usize, values: Vec<Complex32>) -> Vec<Complex32> {
         }
     });
 
-    let f_even = fft(n / 2, even);
-    let f_odd = fft(n / 2, odd);
+    let f_even = fft_recursive(even, invert);
+    let f_odd = fft_recursive(odd, invert);
 
-    let mut result = Vec::with_capacity(n);
+    let mut result = vec![Complex32::zero(); n];
 
-    // twiddle can be reused
-    let exponent = -2. std::f32::consts::PI * Complex32::i() * (1. / n as f32);
+    let exponent = -2. * std::f32::consts::PI * Complex32::i() * (1. / n as f32);
     let twiddle = exponent.exp();
 
     for k in 0..n / 2 {
-        result[k] = f_even[k] + f_odd[k] * twiddle;
-        result[k + n / 2] = f_even[k] - f_odd[k] * twiddle;
+        result[k] = f_even[k] + f_odd[k] * twiddle.powi(k as i32);
+        result[k + n / 2] = f_even[k] - f_odd[k] * twiddle.powi(k as i32);
     }
     result
+}
+
+/// Handle scaling of IDFT vs DFT
+pub fn fft(vals_real: Vec<f32>, invert: bool) -> Vec<Complex32> {
+    let n = vals_real.len();
+
+    // pad the values to be a power of two and convert them to complex numbers
+    let vals: Vec<Complex32> = if n.is_power_of_two() {
+        vals_real.iter().map(|x| Complex32::new(*x, 0.)).collect()
+    } else {
+        let pad_to = n.next_power_of_two();
+        let mut pad = vec![Complex32::zero(); pad_to];
+        for i in 0..n {
+            pad[i] = Complex32::new(vals_real[i], 0.);
+        }
+        pad
+
+    };
+
+    let y = fft_recursive(vals, invert);
+
+    if invert {
+        return y.iter().map(|x| x / n as f32).collect()
+    }
+    y 
 }
