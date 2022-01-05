@@ -1,6 +1,6 @@
 ---
 jupytext:
-  formats: ipynb,md:myst
+  formats: md:myst
   text_representation:
     extension: .md
     format_name: myst
@@ -48,15 +48,8 @@ This process has already been used in court to verify the authenticity of provid
 Since i only have data from europe, my algorithm is only suitable for audio from europe. It should, however, be possible 
 to adapt it to another frequency with only minimal changes. You can find your power grid frequency using the map below.
 
-```{note}
-Look at this cool map
 ![Powergrid frequencies across the world](https://upload.wikimedia.org/wikipedia/commons/7/70/World_Map_of_Mains_Voltages_and_Frequencies%2C_Detailed.svg)
 *SomnusDe, Public domain, via Wikimedia Commons*
-```
-
-```{code-cell} ipython3
-lol
-```
 
 But exactly by how much does the grid frequency fluctuate? According to the [National Grids Mandatory Frequency Response Guide](https://www.nationalgrid.com/sites/default/files/documents/Mandatory%20Frequency%20Response%20Guide%20v1.1.pdf), the grid is considered
 
@@ -91,35 +84,24 @@ from scipy.io import wavfile
 from scipy.signal import resample
 
 # change this to 60Hz for US-audio
-enf = 50
+ENF = 50
 
 # if you are using your own data, make sure its mono
 fs_orig, data_orig = wavfile.read("ENF-WHU-Dataset/ENF-WHU-Dataset/H1/001.wav")
 fs = 500
 data = resample(data_orig, int((data_orig.shape[0] / fs_orig) * fs))
-# the maximum frequency we want to analyze
-# max_f = 50.5
-# the precision with which we wish to analyze
-# precision = 1/100
-# the number of samples per second
-# samplerate = np.ceil(2 * max_f)
-# the number of samples per fft
-# window_size = int(max_f / precision)
-
-# data = resample(data_, int(data_.size * (samplerate / samplerate_)))#
 ```
 
-## Applying a Bandpass
-Since we are dealing with real-world data, the signal contains **a lot** more frequencies than just the ENF. Since we are not interested in any of them, we can remove them using a bandpass filter, that removes all frequencies outside a certain range. Luckily, scipy provides the [signal.iirpeak](https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.iirpeak.html) filter, which is like a bandpass except for a very narrow band.
+### Applying a Bandpass
+Since we are dealing with real-world data, the signal contains **a lot** more frequencies than just the ENF. Since we are not interested in any of them, we can remove them using a bandpass filter that removes all frequencies outside a certain range. Due to the narrowness of the band we wish to retain, most conventional filters fail to converge. Luckily, scipy provides the [signal.iirpeak](https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.iirpeak.html) filter, which is like a bandpass except for a very narrow band.
 
 ```{code-cell} ipython3
-from scipy.signal import freqz, iirpeak
+from scipy.signal import freqz, iirpeak, filtfilt
 
-
-b, a = iirpeak(50, 30, fs=fs)
+b, a = iirpeak(ENF, 30, fs=fs)
 
 # test frequency response
-freq, h = freqz(b, a, fs=fs)
+freq, h = freqz(b, a, fs=fs, worN=500)
 
 # Convert frequency response to dB (logarithmic scale)
 plt.plot(freq, 20*np.log10(np.maximum(abs(h), 1e-5)))
@@ -128,73 +110,36 @@ plt.ylabel("Amplitude (dB)")
 plt.xlabel("Frequency (Hz)")
 plt.xlim([0, 100])
 plt.ylim([-50, 10])
-plt.axvspan(49, 51, facecolor="gray", alpha=0.5)
-plt.xticks(list(plt.xticks()[0]) + [49, 51])
+plt.axvspan(ENF - 1, ENF + 1, facecolor="gray", alpha=0.5)
+plt.xticks(list(plt.xticks()[0]) + [ENF - 1, ENF + 1])
 plt.grid()
 plt.show()
+
+# Filter the actual data
+data = filtfilt(b, a, data)
 ```
 
 Just slicing the wave file to the size of a window is insufficient, since it artificially creates edges at the start and end of the window. To avoid this, we multiply the window by a half cosine function to ensure a smooth transition. (This is called a [Hanning Window](https://numpy.org/doc/stable/reference/generated/numpy.hanning.html))![hanning_window.png](attachment:hanning_window.png)
 
 ```{code-cell} ipython3
-window = data[:window_size]
-fourier = np.abs(np.fft.fft(window * np.hanning(window_size)))[:window_size//2]
-frequencies = np.fft.fftfreq(2 * fourier.size, d=1/samplerate)[:window_size//2]
+from scipy.fft import next_fast_len, rfft, rfftfreq
+
+window_size = 5000
+pad_to = next_fast_len(window_size, real=True)
+window = data[:window_size] * np.hanning(window_size)
+fourier = np.abs(rfft(window, n=pad_to))
+frequencies = rfftfreq(window_size, d=1/fs)
 
 plt.plot(frequencies, fourier)
 plt.xlabel("Frequency [Hz]")
 plt.ylabel("Amount")
 plt.title("Discrete time Fourier transform")
 plt.show()
-print("Main frequency at", np.argmax(fourier) * samplerate/window_size, "Hz")
-```
-
-## Improving DFT
-The DFT above is flawed. There is a spike at around 0Hz that definitely does not belong there.
-It has been shown that the accuracy of the Discrete-Time Fourier Transform increases when operating on the first-order derivative of the signal.
-
-```{code-cell} ipython3
-window_raw = data[:window_size]
-
-window = window_raw * np.hanning(window_size)
-window_derivative = np.diff(window_raw, prepend=0) * np.hanning(window_size)
-
-fourier = np.abs(np.fft.fft(window))[:window_size//2]
-fourier_derivative = np.abs(np.fft.fft(window_derivative))[:window_size//2]
-
-frequencies = np.fft.fftfreq(2 * fourier.size, d=1/samplerate)[:window_size//2]
-
-# scale |X'(K)| by F(K)
-F = lambda x: (np.pi * x) / (window_size * np.sin((np.pi * x) / window_size))
-fourier_derivative = F(np.arange(window_size//2)) * fourier_derivative
-
-# remove the frequency of 0Hz - it does not make logical sense and messes up the F(0) calculation
-fourier_derivative = fourier_derivative[1:]
-frequencies = frequencies[1:]
-fourier = fourier[1:]
-
-# plt.plot(frequencies, fourier)
-plt.plot(frequencies, fourier_derivative)
-plt.xlabel("Frequency [Hz]")
-plt.ylabel("Amount")
-plt.title("Discrete time Fourier Transform (First-order derivative)")
-plt.show()
-
-
-f = 1/(2 * np.pi) * (np.argmax(fourier_derivative) / np.argmax(fourier))
-print("Main frequency at", np.argmax(fourier_derivative) * samplerate/window_size, "Hz")
-print(np.argmax(fourier_derivative))
-print(f)
-```
-
-The weird spike at the beginning of the recording is gone and the spike at 48.76Hz is even clearer than before.
-
-```{code-cell} ipython3
-print(window_size, samplerate)
+print("Main frequency at", np.argmax(fourier) * fs/window_size, "Hz")
 ```
 
 We can clearly see the spike at approximately 50Hz. This is the noise created by the electric network that we are looking
-for. If, at this point, you do not see a spike, the audio does not contain that noise and it cannot be timestamped using the
+for. If, at this point, you do not see a spike, the audio does not contain any ENF artifacts and it cannot be timestamped using the
 algorithm.
 
 +++
