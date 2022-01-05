@@ -5,11 +5,11 @@ jupytext:
     extension: .md
     format_name: myst
     format_version: 0.13
-    jupytext_version: 1.11.5
+    jupytext_version: 1.13.5
 kernelspec:
-  display_name: Python 3
+  display_name: venv
   language: python
-  name: python3
+  name: venv
 ---
 
 # Electric Network Frequency Analysis
@@ -28,6 +28,7 @@ Because of this, the notebook got quite large. Please make use of the table of c
 * [Introduction](#Introduction)
 * [Fourier Transformation](#Fourier-Transformation)
 * [Short-time Fourier Transform](#Short-time-Fourier-Transform)
+* [Matching the Dataset](#Matching-the-Dataset)
 
 +++
 
@@ -59,7 +60,7 @@ But exactly by how much does the grid frequency fluctuate? According to the [Nat
 | above | 50.2Hz | 50.5Hz |
 
 We will therefore only perform fourier transformations for the frequencies between 49.5Hz and 50.5Hz. Since the dataset
-has a precision up to $\frac{1}{100}$ of a Hertz, it would be good to match that. We therefore need to perform Fourier transformations for $(50.5 - 49.5) \times 100 = 100$ frequencies.
+has a precision up to $\frac{1}{1000}$ of a Hertz, it would be good to match that. We therefore need to perform Fourier transformations for $(50.5 - 49.5) \times 1000 = 1000$ frequencies.
 The Nyquist Frequency, which i explain [here](#Nyquist-Frequency), tells us that to analyze frequencies up to 50.5Hz, we will need (at least) a sample rate of 101 samples per second. This is great because .wav files usually sit at around 48000 samples per second. By reducing the number of samples per second, we can greatly reduce the computations required.
 If we want precision up to $\frac{1}{100}$ and a maximum of 50.5Hz, we will require $50.5 \times 100 = 5050$ samples.
 
@@ -77,6 +78,7 @@ The exact Algorithm is beyond the scope of this document, however the Youtube Ch
 TLDR;<br>
 A Fourier Transformation is a process by which the underlying frequencies of a noisy signal can be extracted.<br>
 
+### Reading the data
 The [data](https://data.nationalgrideso.com/system/system-frequency-data?from=0#resources) has a resolution of one sample per second. So there is no need to calculate anything more precise than that since we would just be overfitting the data anyway.
 
 ```{code-cell} ipython3
@@ -119,6 +121,7 @@ plt.show()
 data = filtfilt(b, a, data)
 ```
 
+### Applying a Fourier Transform
 Just slicing the wave file to the size of a window is insufficient, since it artificially creates edges at the start and end of the window. To avoid this, we multiply the window by a half cosine function to ensure a smooth transition. (This is called a [Hanning Window](https://numpy.org/doc/stable/reference/generated/numpy.hanning.html))![hanning_window.png](attachment:hanning_window.png)
 
 ```{code-cell} ipython3
@@ -147,67 +150,50 @@ algorithm.
 ## Short-time Fourier Transform
 This, however, is just a Fourier transform of the first second.<br>
 Since we are interested in how the frequency varies over time, we need to compare multiple transformations against each other. This process is known as a [Short-time Fourier Transform](https://en.wikipedia.org/wiki/Short-time_Fourier_transform)<br>
-A samplerate of 48000 means that to get one Fourier transform per second, we need to offset our sliding window by 48000 samples each time. Since we expect a frequency of around 50 Hertz, a window size of 5 seconds, amounting to ~250 cycles should be more than sufficient.<br>
+
 The next question is: How far should the sliding window shift after each iteration? This will determine the resolution of our final frequency graph. Since the [data](https://data.nationalgrideso.com/system/system-frequency-data?from=0#resources) only lists one data point per second, calculating anything more than that would just be overfitting the data. If you want to use this with your own dataset, you might want to adjust this value.
 
 ```{code-cell} ipython3
-window_length = 10 # length of the window in seconds
-window_size = samplerate * window_length # number of samples per window
-n_windows = 1 # total number of windows
-offset = 1024 # offset of each window
-f_min = 49.5
-f_max = 50.5
-num_f = 100
-d_f = (f_max - f_min) / num_f
-result = np.empty((n_windows, num_f))
-```
+duration = 5 # length of the window in seconds
+window_size = fs * duration # number of samples per window
+pad_to = next_fast_len(window_size, real=True)
 
-```{code-cell} ipython3
-%%time
-for ix in range(n_windows):
-    window = data[ix * offset:ix * offset + window_size]
-    window = window * np.hanning(window_size)
-    fourier = np.abs(dft(window, d_f, np.linspace(f_min, f_max, num_f)))
-    result[ix] = fourier[:num_f]
-result = 20 * np.log10(result)
-```
+offset = fs # offset of each window
+max_n_windows = 100 # maximum number of fft's to compute
+n_windows = min(max_n_windows, (data.shape[0] - window_size)//offset) # total number of windows
+enf_change = np.zeros(n_windows)
 
-```{code-cell} ipython3
-plt.imshow(result.transpose(), cmap="inferno", interpolation="nearest", aspect="auto", origin="lower")
-plt.colorbar()
-plt.xlabel("Time")
-plt.ylabel("Frequency")
+for i in range(n_windows):
+    start = i * offset
+    window = data[start:start + window_size] * np.hanning(window_size)
+    fourier = np.abs(rfft(window, n=pad_to))
+    enf_change[i] = np.argmax(fourier) * (fs/window_size)
+    
+plt.plot(enf_change)
+plt.xlabel("Time (s)")
+plt.ylabel("ENF")
 plt.show()
 ```
 
-Now, is this just a slower, more complicated version of `plt.specgram`?<br>
-Yes. But i feel like its worth understanding whats going on behind the scenes.
-
-+++
-
-We need to scale the values to the dB scale, which is logarithmic.
+## Matching the Dataset
+Thats our ENF-Noise. Now its time to look at the ground truth data (from britain). Since the format from datasets
+around the world might differ, you cannot reuse this part with another dataset.
 
 ```{code-cell} ipython3
-from scipy import signal
-t, f, sxx = signal.spectrogram(data, fs=samplerate)
+import pandas as pd
 
-plt.pcolormesh(f, t, 10 * np.log10(sxx), shading="gouraud", cmap="inferno")
-plt.ylabel("Frequency [Hz]")
-plt.xlabel("Time [sec]")
+date_parser = lambda date: pd.datetime.strptime(date, "%Y-%m-%d %H:%M:%S")
+df = pd.read_csv("data/fNew 2020 2.csv", parse_dates=True, date_parser=date_parser)
+
+plt.plot(df.iloc[:, 1].values[:60])
+plt.xlabel("Time (s)")
+plt.ylabel("ENF (Hz)")
+plt.title("Ground Truth")
 plt.show()
+
 ```
 
-```{code-cell} ipython3
-x = np.arange(100)
-resampled = resample(x, 50)
-print(resampled)
-```
-
-```{code-cell} ipython3
-x = np.array([2, 3, 4, 1])
-print(np.fft.fft(x))
-print(np.fft.ifft(x))
-```
+It might be a good idea to look at the relative changes in ENF instead of the absolute values.
 
 ```{code-cell} ipython3
 
