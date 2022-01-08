@@ -16,9 +16,8 @@ kernelspec:
 This Notebook is supposed to act as a step-by-step explanation of the
 [Electric Network Frequency (ENF) Analysis script](https://github.com/Wuelle/enf_analysis) i made. 
 I assume that the reader is familiar with the basic concept of a Fourier Transformation.
-If you want to follow along, please run the downloader script and place an arbitrary audio sample in the `data/` directory.
-Note that to keep this project fun, i tried to implement as much of the math as possible on my own.
-Because of this, the notebook got quite large. Please make use of the table of contents below and skip around to the interesting parts.
+If you want to follow along, please run the downloader script and place an arbitrary audio sample in the `data/` directory.<br>
+I also want to explicitly thank the students from the University of Wuhan for providing a [Dataset of ENF Recordings](https://github.com/ghuawhu/ENF-WHU-Dataset)
 
 <br>
 <em>Supported by National Grid ESO Open Data<em>
@@ -67,7 +66,6 @@ If we want precision up to $\frac{1}{100}$ and a maximum of 50.5Hz, we will requ
 ```{code-cell} ipython3
 import matplotlib.pyplot as plt
 import numpy as np
-from numpy.fft import fft
 
 %matplotlib inline
 plt.rcParams["figure.figsize"] = (20,5)
@@ -138,7 +136,6 @@ plt.xlabel("Frequency [Hz]")
 plt.ylabel("Amount")
 plt.title("Discrete time Fourier transform")
 plt.show()
-print("Main frequency at", np.argmax(fourier) * fs/window_size, "Hz")
 ```
 
 We can clearly see the spike at approximately 50Hz. This is the noise created by the electric network that we are looking
@@ -147,31 +144,46 @@ algorithm.
 
 +++
 
-## Short-time Fourier Transform
-This, however, is just a Fourier transform of the first second.<br>
-Since we are interested in how the frequency varies over time, we need to compare multiple transformations against each other. This process is known as a [Short-time Fourier Transform](https://en.wikipedia.org/wiki/Short-time_Fourier_transform)<br>
+## Instantaneous Frequency
+There is a huge problem with using Fourier Transforms for analysing frequency variation: it takes a window of audio
+and extracts the contained frequencies. But we know that they are not constant. Of course they can approximated to be constant by using a very small window. But since the frequency resolution of the Fourier Transform is given by
+$\frac{\mbox{sample frequency}}{\mbox{window size}}$, reducing the window size would also reduce our resolution.
 
-The next question is: How far should the sliding window shift after each iteration? This will determine the resolution of our final frequency graph. Since the [data](https://data.nationalgrideso.com/system/system-frequency-data?from=0#resources) only lists one data point per second, calculating anything more than that would just be overfitting the data. If you want to use this with your own dataset, you might want to adjust this value.
+There is a solution for this problem: The [Hilbert Transform](https://en.wikipedia.org/wiki/Hilbert_transform)<br>
+There are two different ways to think about frequency:
+* Cycles per unit of time
+* Angular velocity
+
+Since we already filtered all frequencies that are not close to 50Hz, the Hilbert Transform should only contain 
+the ENF Noise we are after.
 
 ```{code-cell} ipython3
-duration = 5 # length of the window in seconds
-window_size = fs * duration # number of samples per window
-pad_to = next_fast_len(window_size, real=True)
+from scipy.signal import hilbert
 
-offset = fs # offset of each window
-max_n_windows = 100 # maximum number of fft's to compute
-n_windows = min(max_n_windows, (data.shape[0] - window_size)//offset) # total number of windows
-enf_change = np.zeros(n_windows)
+analytic_data = hilbert(data)
 
-for i in range(n_windows):
-    start = i * offset
-    window = data[start:start + window_size] * np.hanning(window_size)
-    fourier = np.abs(rfft(window, n=pad_to))
-    enf_change[i] = np.argmax(fourier) * (fs/window_size)
-    
-plt.plot(enf_change)
-plt.xlabel("Time (s)")
-plt.ylabel("ENF")
+instantaneous_phase = np.unwrap(np.angle(analytic_data))
+instantaneous_frequency = np.diff(instantaneous_phase) / (2 * np.pi) * fs
+```
+
+For fun, lets plot this against the ground truth provided by the students of wuhan
+
+```{code-cell} ipython3
+# load the ground truth and apply the hilbert transform
+fs_orig, data_orig = wavfile.read("ENF-WHU-Dataset/ENF-WHU-Dataset/H1_ref/001_ref.wav")
+isolated_noise = resample(data_orig, int((data_orig.shape[0] / fs_orig) * fs))
+
+isolated_inst_phase = np.unwrap(np.angle(hilbert(isolated_noise)))
+isolated_inst_freq = np.diff(isolated_inst_phase) / (2 * np.pi) * fs
+
+# plot both graphs
+plt.plot(instantaneous_frequency[:200], label="Reconstructed")
+plt.plot(isolated_inst_freq[:200], label="Ground Truth")
+plt.ylim([45, 55])
+plt.ylabel("Frequency (Hz)")
+plt.xlabel("Time")
+plt.title("Reconstructed vs Ground Truth")
+plt.legend
 plt.show()
 ```
 
@@ -190,7 +202,6 @@ plt.xlabel("Time (s)")
 plt.ylabel("ENF (Hz)")
 plt.title("Ground Truth")
 plt.show()
-
 ```
 
 It might be a good idea to look at the relative changes in ENF instead of the absolute values.
