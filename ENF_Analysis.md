@@ -85,23 +85,34 @@ from scipy.signal import resample
 
 # change this to 60Hz for US-audio
 ENF = 50
+# the nth harmonic to analyze
+HARMONIC = 1
+# bandpass width, in Hz
+DELTA = 1
+# sample rate (data will be resampled to match desired frequency)
+FS = 500
+# Nyquist frequency
+NYQ = FS // 2
+
 
 # if you are using your own data, make sure its mono
 fs_orig, data_orig = wavfile.read("ENF-WHU-Dataset/ENF-WHU-Dataset/H1/001.wav")
-fs = 500
-data = resample(data_orig, int((data_orig.shape[0] / fs_orig) * fs))
+data = resample(data_orig, int((data_orig.shape[0] / fs_orig) * FS))
 ```
 
 ### Applying a Bandpass
-Since we are dealing with real-world data, the signal contains **a lot** more frequencies than just the ENF. Since we are not interested in any of them, we can remove them using a bandpass filter that removes all frequencies outside a certain range. Due to the narrowness of the band we wish to retain, most conventional filters fail to converge. Luckily, scipy provides the [signal.iirpeak](https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.iirpeak.html) filter, which is like a bandpass except for a very narrow band.
+Since we are dealing with real-world data, the signal contains **a lot** more frequencies than just the ENF. Since we are not interested in any of them, we can remove them using a bandpass filter that removes all frequencies outside a certain range. Luckily, scipy provides the [signal.butter](https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.butter.html) filter, which is designed to be as flat as possible within the passband. That way, the frequencies within the band barely get modified
 
 ```{code-cell} ipython3
-from scipy.signal import freqz, iirpeak, filtfilt
+from scipy.signal import butter
 
-b, a = iirpeak(ENF, 30, fs=fs)
+LOWER = (ENF - DELTA) * HARMONIC
+UPPER = (ENF + DELTA) * HARMONIC
+
+b, a = butter(4, (LOWER, UPPER), "bandpass", fs=FS)
 
 # test frequency response
-freq, h = freqz(b, a, fs=fs, worN=500)
+freq, h = freqz(b, a, fs=FS, worN=500)
 
 # Convert frequency response to dB (logarithmic scale)
 plt.plot(freq, 20*np.log10(np.maximum(abs(h), 1e-5)))
@@ -109,9 +120,8 @@ plt.title("Frequency Response")
 plt.ylabel("Amplitude (dB)")
 plt.xlabel("Frequency (Hz)")
 plt.xlim([0, 100])
-plt.ylim([-50, 10])
-plt.axvspan(ENF - 1, ENF + 1, facecolor="gray", alpha=0.5)
-plt.xticks(list(plt.xticks()[0]) + [ENF - 1, ENF + 1])
+plt.axvspan(LOWER, UPPER, facecolor="gray", alpha=0.5)
+plt.xticks(list(plt.xticks()[0]) + [LOWER, UPPER])
 plt.grid()
 plt.show()
 
@@ -129,7 +139,7 @@ window_size = 5000
 pad_to = next_fast_len(window_size, real=True)
 window = data[:window_size] * np.hanning(window_size)
 fourier = np.abs(rfft(window, n=pad_to))
-frequencies = rfftfreq(window_size, d=1/fs)
+frequencies = rfftfreq(window_size, d=1/FS)
 
 plt.plot(frequencies, fourier)
 plt.xlabel("Frequency [Hz]")
@@ -163,27 +173,48 @@ from scipy.signal import hilbert
 analytic_data = hilbert(data)
 
 instantaneous_phase = np.unwrap(np.angle(analytic_data))
-instantaneous_frequency = np.diff(instantaneous_phase) / (2 * np.pi) * fs
+instantaneous_frequency = np.diff(instantaneous_phase) / (2 * np.pi) * FS
 ```
 
-For fun, lets plot this against the ground truth provided by the students of wuhan
+For fun, lets plot this against the ground truth provided by the students of Wuhan University
 
 ```{code-cell} ipython3
-# load the ground truth and apply the hilbert transform
+# load the ground truth and apply the Hilbert transform
 fs_orig, data_orig = wavfile.read("ENF-WHU-Dataset/ENF-WHU-Dataset/H1_ref/001_ref.wav")
-isolated_noise = resample(data_orig, int((data_orig.shape[0] / fs_orig) * fs))
+isolated_noise = resample(data_orig, int((data_orig.shape[0] / fs_orig) * FS))
 
 isolated_inst_phase = np.unwrap(np.angle(hilbert(isolated_noise)))
-isolated_inst_freq = np.diff(isolated_inst_phase) / (2 * np.pi) * fs
+isolated_inst_freq = np.diff(isolated_inst_phase) / (2 * np.pi) * FS
 
-# plot both graphs
-plt.plot(instantaneous_frequency[:200], label="Reconstructed")
-plt.plot(isolated_inst_freq[:200], label="Ground Truth")
-plt.ylim([45, 55])
-plt.ylabel("Frequency (Hz)")
-plt.xlabel("Time")
-plt.title("Reconstructed vs Ground Truth")
-plt.legend
+# scale and resample the signal
+factor = max(data[:100])/max(isolated_noise[:100])  # ugly hack
+y1 = resample(isolated_noise[:100] * factor, 1000)
+y2 = resample(data[:100], 1000)
+
+
+fig, (ax1, ax2) = plt.subplots(2)
+
+# plot amplitude
+ax1.plot(y1, label="Ground Truth")
+ax1.plot(y2, label="Filtered")
+ax1.set_title("Amplitude")
+ax1.set_ylabel("Amplitude")
+ax1.set_xlabel("Time")
+ax1.grid()
+ax1.legend()
+
+# plot frequency
+ax2.plot(isolated_inst_freq[:100], label="Ground Truth")
+ax2.plot(instantaneous_frequency[:100], label="Reconstructed")
+ax2.set_ylim([48, 52])
+ax2.set_ylabel("Frequency (Hz)")
+ax2.set_xlabel("Time")
+ax2.set_title("Frequency")
+ax2.grid()
+ax2.legend()
+
+
+plt.tight_layout()
 plt.show()
 ```
 
