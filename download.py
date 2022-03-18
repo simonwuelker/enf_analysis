@@ -6,6 +6,9 @@ url = "https://data.nationalgrideso.com/system/system-frequency-data/datapackage
 download_to = "tmp/"
 extract_to = "data/"
 
+os.mkdir(download_to)
+os.mkdir(extract_to)
+
 resources = requests.get(url).json()["resources"]
 
 print(f"Found {len(resources)} datasets")
